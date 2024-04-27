@@ -9,10 +9,9 @@
 #include "../lib/mat_mul.h"
 
 #define NUM_LEN 10
-#define INVALID_POINTER { \
-    fprintf(stderr, "Invalid pointer\n"); \
-    exit(1); \
-    } \
+#define PACK_SIZE 16
+#define BLOCK_SIZE 256
+// #define UNLOOP_RATE
 
 void matmul_openblas (struct mat *A, struct mat *B, struct mat *C) {
     if (A == NULL || B == NULL || C == NULL) INVALID_POINTER
@@ -29,7 +28,10 @@ void matmul_plain (struct mat *A, struct mat *B, struct mat *C) {
 
 void matmul_simd (struct mat *A, struct mat *B, struct mat *C) {
     if (A == NULL || B == NULL || C == NULL) INVALID_POINTER
-    #pragma omp parallel for
+    if (A->cols != B->cols) UNMATCHED_MATRIX
+    if (A->cols % 8 || B ->cols % 8) PACK_UNABLE
+
+    // #pragma omp parallel for
     for (size_t i = 0; i < C->rows; i++) {
         for (size_t j = 0; j < C->cols; j++) {
             __m256 sum = _mm256_setzero_ps();
@@ -44,8 +46,89 @@ void matmul_simd (struct mat *A, struct mat *B, struct mat *C) {
             __m128 dot_hadd = _mm_hadd_ps(dot, dot);
             C->data[i * C->cols + j] = _mm_cvtss_f32(dot_hadd);
         }
+    }  
+}
+
+void matmul_simd_512 (struct mat *A, struct mat *B, struct mat *C) {
+    if (A == NULL || B == NULL || C == NULL) INVALID_POINTER
+    if (A->cols != B->cols) UNMATCHED_MATRIX
+    if (A->cols % 16 || B ->cols % 16) PACK_UNABLE
+
+    for (size_t i = 0; i < C->rows; i++) {
+        for (size_t j = 0; j < C->cols; j++) {
+            __m512 sum = _mm512_setzero_ps();
+            for (size_t k = 0; k < A->cols; k += 16) {
+                __m512 a = _mm512_loadu_ps(&A->data[i * A->cols + k]);
+                __m512 b = _mm512_loadu_ps(&B->data[j * B->cols + k]);
+                sum = _mm512_fmadd_ps(a, b, sum);
+            }
+            C->data[i * C->cols + j] = _mm512_mask_reduce_add_ps(65535, sum);
+        }
     }
 }
+
+void matmul_blocked (struct mat *A, struct mat *B, struct mat *C) {
+    if (A == NULL || B == NULL || C == NULL) INVALID_POINTER
+    if (A->cols != B->cols) UNMATCHED_MATRIX
+    // if (A->cols % 16 || B ->cols % 16) PACK_UNABLE
+
+    for (size_t i = 0; i < C->rows; i += BLOCK_SIZE) {
+        for (size_t j = 0; j < C->cols; j += BLOCK_SIZE) {
+            float *block = (float *)malloc(BLOCK_SIZE * BLOCK_SIZE * sizeof(float));
+            for (size_t ii = i; ii < MIN(i + BLOCK_SIZE, C->rows); ii++) {
+                for (size_t jj = j; jj < MIN(j + BLOCK_SIZE, C->cols); jj++) {
+                    __m512 sum = _mm512_setzero_ps();
+                    for (size_t k = 0; k < A->cols; k += 16) {
+                        __m512 a = _mm512_loadu_ps(&A->data[ii * A->cols + k]);
+                        __m512 b = _mm512_loadu_ps(&B->data[jj * B->cols + k]);
+                        sum = _mm512_fmadd_ps(a, b, sum);
+                    }
+                    block[(ii - i) * BLOCK_SIZE + (jj - j)] = _mm512_mask_reduce_add_ps(65535, sum);
+                }
+            }
+            for (size_t ii = i; ii < MIN(i + BLOCK_SIZE, C->rows); ii++) {
+                memcpy(&C->data[ii * C->cols + j], &block[(ii - i) * BLOCK_SIZE], BLOCK_SIZE * sizeof(float));
+            }
+            free(block);
+        }
+    }
+}
+
+void matmul_unloop (struct mat *A, struct mat *B, struct mat *C) {
+        if (A == NULL || B == NULL || C == NULL) INVALID_POINTER
+    if (A->cols != B->cols) UNMATCHED_MATRIX
+    // if (A->cols % 16 || B ->cols % 16) PACK_UNABLE
+
+    for (size_t i = 0; i < C->rows; i += BLOCK_SIZE) {
+        for (size_t j = 0; j < C->cols; j += BLOCK_SIZE) {
+            
+            for (size_t ii = i; ii < MIN(i + BLOCK_SIZE, C->rows); ii++) {
+                for (size_t jj = j; jj < MIN(j + BLOCK_SIZE, C->cols); jj++) {
+                    __m512 sum = _mm512_setzero_ps();
+                    for (size_t k = 0; k < A->cols; k += 16) {
+                    __m512 a = _mm512_loadu_ps(&A->data[ii * A->cols + k]);
+                    __m512 b = _mm512_loadu_ps(&B->data[jj * B->cols + k]);
+                    sum = _mm512_fmadd_ps(a, b, sum);
+                    
+                    // a = _mm512_loadu_ps(&A->data[ii * A->cols + k + 16]);
+                    // b = _mm512_loadu_ps(&B->data[jj * B->cols + k + 16]);
+                    // sum = _mm512_fmadd_ps(a, b, sum);
+                    
+                    // a = _mm512_loadu_ps(&A->data[ii * A->cols + k + 32]);
+                    // b = _mm512_loadu_ps(&B->data[jj * B->cols + k + 32]);
+                    // sum = _mm512_fmadd_ps(a, b, sum);
+                    
+                    // a = _mm512_loadu_ps(&A->data[ii * A->cols + k + 48]);
+                    // b = _mm512_loadu_ps(&B->data[jj * B->cols + k + 48]);
+                    // sum = _mm512_fmadd_ps(a, b, sum);
+                    }
+                    C->data[ii * C->cols + jj] = _mm512_mask_reduce_add_ps(65535, sum);
+                }
+            }
+        }
+    }
+}
+
 
 void gen_random_mat (size_t scale, struct mat *A, struct mat *B, struct mat *C) {
     if (A == NULL || B == NULL || C == NULL) INVALID_POINTER 
