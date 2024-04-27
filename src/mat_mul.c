@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <immintrin.h>
+#include <math.h>
 
 #include "omp.h"
 #include "cblas.h"
@@ -44,6 +45,28 @@ void matmul_simd (struct mat *A, struct mat *B, struct mat *C) {
             C->data[i * C->cols + j] = _mm_cvtss_f32(dot_hadd);
         }
     }
+}
+
+void gen_random_mat (size_t scale, struct mat *A, struct mat *B, struct mat *C) {
+    if (A == NULL || B == NULL || C == NULL) INVALID_POINTER 
+
+    printf ("Generaing Matrixes...");
+
+    // memory allocation
+    size_t size = 2 * pow(8, scale);
+    A->rows = A->cols = B->rows = B->cols = C->rows = C->cols = size;
+    A->data = (float *)malloc(A->rows * A->cols * sizeof(float));
+    B->data = (float *)malloc(B->rows * B->cols * sizeof(float));
+    C->data = (float *)malloc(C->rows * C->cols * sizeof(float));
+    
+    for (size_t i = 0; i < size * size; i++) {
+        A->data[i] = 2.0 * (float)drand48() - 1.0;
+    }
+    for (size_t i = 0; i < size * size; i++) {
+        B->data[i] = 2.0 * (float)drand48() - 1.0;
+    }
+
+    printf ("Done.\n");
 }
 
 void read_csv_to_mat (const char *path, struct mat *A, struct mat *B, struct mat *C) {
